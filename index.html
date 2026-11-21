@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>
   <meta charset="UTF-8" />
@@ -58,11 +57,11 @@
   </style>
 </head>
 <body class="min-h-screen flex flex-col">
+  
 <div class="bg-amber-500 text-slate-950 text-center text-xs font-extrabold py-1.5 no-print">
   نسخة تجريبية (Beta) — ساعدنا نتحسن:
   <a href="https://forms.gle/PUT_YOUR_FORM_ID" target="_blank" class="underline">ابعتلنا ملاحظاتك</a>
 </div>
-
   <!-- ==================== ACCESS PASSWORD GATE OVERLAY ==================== -->
   <div id="passwordGate" class="fixed inset-0 z-[100] bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4 no-print">
     <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl text-white space-y-6">
@@ -1688,54 +1687,292 @@
     // ==================== CORE STATE & NAVIGATION ====================
     let targetLayer = 'base';
     const charts = {};
+    const chartConfigs = {};
 
     function showToast(msg) {
-      try {
-        const box = document.getElementById('toastBox');
-        const txt = document.getElementById('toastMsg');
-        if (!box || !txt) return;
-        txt.textContent = msg;
-        box.classList.remove('hidden');
-        clearTimeout(window._toastTimer);
-        window._toastTimer = setTimeout(() => box.classList.add('hidden'), 3200);
-      } catch (e) {}
-    }
-
-    function switchTab(tabId) {
-      try {
-        document.querySelectorAll('.tab-panel').forEach(el => {
-          el.classList.remove('active');
-          el.style.display = 'none';
-        });
-        const panel = document.getElementById('tab-' + tabId);
-        if (panel) {
-          panel.classList.add('active');
-          panel.style.display = 'block';
-        }
-
-        document.querySelectorAll('.nav-tab').forEach(btn => {
-          btn.className = 'nav-tab px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap flex items-center gap-2 text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer';
-        });
+// ... existing code ... -->
         const activeBtn = document.getElementById('nav-' + tabId);
         if (activeBtn) {
           activeBtn.className = 'nav-tab px-3.5 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap flex items-center gap-2 bg-amber-500 text-slate-950 shadow-sm cursor-pointer';
         }
+
+        // Re-render visible tab charts after layout reflow so hidden canvases never stay 0px
+        requestAnimationFrame(() => {
+          reRenderVisibleCharts();
+        });
         window.scrollTo({ top: 0, behavior: 'smooth' });
       } catch (err) {
         console.error('Navigation error:', err);
       }
     }
 
-    function renderSafeChart(key, canvasEl, config) {
-      try {
-        if (!canvasEl || typeof window.Chart === 'undefined') return;
-        if (charts[key]) {
-          charts[key].destroy();
+    function reRenderVisibleCharts() {
+      Object.keys(chartConfigs).forEach(key => {
+        const entry = chartConfigs[key];
+        if (!entry || !entry.canvas) return;
+        const rect = entry.canvas.getBoundingClientRect();
+        if (rect.width > 10 && rect.height > 10) {
+          if (charts[key] && typeof charts[key].resize === 'function') {
+            try {
+              charts[key].resize();
+              charts[key].update('none');
+            } catch (e) {
+              renderSafeChart(key, entry.canvas, entry.config);
+            }
+          } else {
+            renderSafeChart(key, entry.canvas, entry.config);
+          }
         }
-        charts[key] = new window.Chart(canvasEl, config);
-      } catch (err) {
-        console.warn('Chart rendering skipped or offline:', key, err);
+      });
+    }
+
+    // Built-in High-DPI HTML5 Canvas Engineering Plotter (Fallback if Chart.js CDN is blocked/offline)
+    function drawFallbackCanvasChart(canvasEl, config) {
+      if (!canvasEl || !config) return;
+      const parent = canvasEl.parentElement;
+      const cssW = Math.max(280, (parent && parent.clientWidth) || 360);
+      const cssH = Math.max(190, (parent && parent.clientHeight) || 240);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+      canvasEl.width = Math.floor(cssW * dpr);
+      canvasEl.height = Math.floor(cssH * dpr);
+      canvasEl.style.width = cssW + 'px';
+      canvasEl.style.height = cssH + 'px';
+
+      const ctx = canvasEl.getContext('2d');
+      if (!ctx) return;
+      ctx.save();
+      ctx.scale(dpr, dpr);
+
+      const isDark = canvasEl.id === 'laChart';
+      const bgCol = isDark ? '#1e293b' : '#ffffff';
+      const gridCol = isDark ? 'rgba(148,163,184,0.22)' : '#e2e8f0';
+      const axisCol = isDark ? '#94a3b8' : '#475569';
+      const textCol = isDark ? '#f1f5f9' : '#0f172a';
+
+      ctx.fillStyle = bgCol;
+      ctx.fillRect(0, 0, cssW, cssH);
+
+      const type = config.type || 'line';
+      const datasets = (config.data && config.data.datasets) || [];
+      const labels = (config.data && config.data.labels) || [];
+      const scales = (config.options && config.options.scales) || {};
+      const xScale = scales.x || {};
+      const yScale = scales.y || {};
+      const isLogX = xScale.type === 'logarithmic';
+      const isReverseX = Boolean(xScale.reverse);
+      const isHorizontalBar = type === 'bar' && config.options && config.options.indexAxis === 'y';
+
+      const pad = { top: 34, right: 18, bottom: 38, left: isHorizontalBar ? 132 : 48 };
+      const plotW = Math.max(80, cssW - pad.left - pad.right);
+      const plotH = Math.max(70, cssH - pad.top - pad.bottom);
+
+      // Legend header
+      ctx.font = 'bold 10px Inter, sans-serif';
+      let lx = pad.left;
+      datasets.forEach((ds, idx) => {
+        if (idx > 2) return;
+        const col = Array.isArray(ds.borderColor) ? ds.borderColor[0] : (ds.borderColor || (Array.isArray(ds.backgroundColor) ? ds.backgroundColor[0] : ds.backgroundColor) || '#f59e0b');
+        ctx.fillStyle = col;
+        ctx.fillRect(lx, 10, 10, 10);
+        ctx.fillStyle = textCol;
+        const shortLbl = String(ds.label || '').slice(0, 24);
+        ctx.fillText(shortLbl, lx + 14, 19);
+        lx += ctx.measureText(shortLbl).width + 24;
+      });
+
+      if (type === 'bar') {
+        const allVals = [];
+        datasets.forEach(ds => (ds.data || []).forEach(v => { if (typeof v === 'number' && isFinite(v)) allVals.push(v); }));
+        const maxVal = Math.max(10, (isHorizontalBar ? xScale.max : yScale.max) || (Math.max(...allVals, 1) * 1.18));
+        const nCats = Math.max(1, labels.length);
+        const nSeries = Math.max(1, datasets.length);
+
+        ctx.strokeStyle = gridCol;
+        ctx.lineWidth = 1;
+        ctx.font = '600 9px JetBrains Mono, monospace';
+
+        if (isHorizontalBar) {
+          for (let g = 0; g <= 4; g++) {
+            const v = (maxVal * g) / 4;
+            const gx = pad.left + (plotW * g) / 4;
+            ctx.beginPath(); ctx.moveTo(gx, pad.top); ctx.lineTo(gx, pad.top + plotH); ctx.stroke();
+            ctx.fillStyle = axisCol;
+            ctx.textAlign = 'center';
+            ctx.fillText(v.toFixed(0), gx, pad.top + plotH + 14);
+          }
+          const bandH = plotH / nCats;
+          labels.forEach((lbl, cIdx) => {
+            const cy = pad.top + cIdx * bandH + bandH * 0.2;
+            const barH = Math.max(10, bandH * 0.55);
+            ctx.fillStyle = textCol;
+            ctx.textAlign = 'right';
+            ctx.fillText(String(lbl).slice(0, 22), pad.left - 8, cy + barH * 0.65);
+            const val = Number((datasets[0] && datasets[0].data && datasets[0].data[cIdx]) || 0);
+            const col = (datasets[0] && Array.isArray(datasets[0].backgroundColor) && datasets[0].backgroundColor[cIdx]) || '#10b981';
+            const bw = Math.max(2, (val / maxVal) * plotW);
+            ctx.fillStyle = col;
+            ctx.fillRect(pad.left, cy, bw, barH);
+            ctx.fillStyle = textCol;
+            ctx.textAlign = 'left';
+            ctx.fillText(val.toFixed(1) + '%', pad.left + bw + 5, cy + barH * 0.65);
+          });
+        } else {
+          for (let g = 0; g <= 4; g++) {
+            const v = (maxVal * g) / 4;
+            const gy = pad.top + plotH - (plotH * g) / 4;
+            ctx.beginPath(); ctx.moveTo(pad.left, gy); ctx.lineTo(pad.left + plotW, gy); ctx.stroke();
+            ctx.fillStyle = axisCol;
+            ctx.textAlign = 'right';
+            ctx.fillText(v.toFixed(1), pad.left - 6, gy + 3);
+          }
+          const groupW = plotW / nCats;
+          labels.forEach((lbl, cIdx) => {
+            const gx = pad.left + cIdx * groupW;
+            ctx.fillStyle = axisCol;
+            ctx.textAlign = 'center';
+            ctx.fillText(String(lbl).slice(0, 14), gx + groupW / 2, pad.top + plotH + 14);
+            const subW = (groupW * 0.72) / nSeries;
+            datasets.forEach((ds, sIdx) => {
+              const val = Number((ds.data && ds.data[cIdx]) || 0);
+              const bh = Math.max(1, (val / maxVal) * plotH);
+              const bx = gx + groupW * 0.14 + sIdx * subW;
+              const by = pad.top + plotH - bh;
+              ctx.fillStyle = ds.backgroundColor || (sIdx === 0 ? '#f59e0b' : '#0f172a');
+              ctx.fillRect(bx, by, Math.max(4, subW - 2), bh);
+            });
+          });
+        }
+        ctx.restore();
+        return;
       }
+
+      // Line / Scatter XY Plotter
+      const seriesPoints = datasets.map(ds => {
+        const pts = [];
+        (ds.data || []).forEach((pt, idx) => {
+          if (pt && typeof pt === 'object') {
+            pts.push({ x: Number(pt.x), y: Number(pt.y) });
+          } else if (typeof pt === 'number') {
+            const xVal = labels[idx] !== undefined ? Number(labels[idx]) : idx;
+            pts.push({ x: isFinite(xVal) ? xVal : idx, y: pt });
+          }
+        });
+        return pts.filter(p => isFinite(p.x) && isFinite(p.y) && (!isLogX || p.x > 0));
+      });
+
+      const allX = seriesPoints.flat().map(p => p.x);
+      const allY = seriesPoints.flat().map(p => p.y);
+      if (!allX.length || !allY.length) {
+        ctx.restore();
+        return;
+      }
+
+      let xMin = xScale.min !== undefined ? Number(xScale.min) : Math.min(...allX);
+      let xMax = xScale.max !== undefined ? Number(xScale.max) : Math.max(...allX);
+      if (xMin === xMax) { xMin *= 0.8; xMax = xMax * 1.2 + 1; }
+
+      let yMin = yScale.min !== undefined ? Number(yScale.min) : (yScale.beginAtZero ? 0 : Math.min(...allY) * 0.95);
+      let yMax = yScale.max !== undefined ? Number(yScale.max) : Math.max(...allY) * 1.08;
+      if (yMin === yMax) { yMin = 0; yMax = yMax + 10; }
+
+      const mapX = (xVal) => {
+        let t = isLogX
+          ? (Math.log10(Math.max(1e-4, xVal)) - Math.log10(Math.max(1e-4, xMin))) / Math.max(1e-6, Math.log10(Math.max(1e-4, xMax)) - Math.log10(Math.max(1e-4, xMin)))
+          : (xVal - xMin) / Math.max(1e-6, xMax - xMin);
+        t = Math.max(0, Math.min(1, t));
+        if (isReverseX) t = 1 - t;
+        return pad.left + t * plotW;
+      };
+      const mapY = (yVal) => {
+        const t = Math.max(0, Math.min(1, (yVal - yMin) / Math.max(1e-6, yMax - yMin)));
+        return pad.top + plotH - t * plotH;
+      };
+
+      // Grid & Axes
+      ctx.strokeStyle = gridCol;
+      ctx.lineWidth = 1;
+      ctx.font = '600 9px JetBrains Mono, monospace';
+      for (let g = 0; g <= 4; g++) {
+        const yv = yMin + ((yMax - yMin) * g) / 4;
+        const py = mapY(yv);
+        ctx.beginPath(); ctx.moveTo(pad.left, py); ctx.lineTo(pad.left + plotW, py); ctx.stroke();
+        ctx.fillStyle = axisCol;
+        ctx.textAlign = 'right';
+        ctx.fillText(yv >= 100 ? yv.toFixed(0) : yv.toFixed(2).replace(/\.00$/, ''), pad.left - 6, py + 3);
+
+        const xv = isLogX
+          ? Math.pow(10, Math.log10(Math.max(1e-4, xMin)) + ((Math.log10(Math.max(1e-4, xMax)) - Math.log10(Math.max(1e-4, xMin))) * g) / 4)
+          : xMin + ((xMax - xMin) * g) / 4;
+        const px = mapX(xv);
+        ctx.beginPath(); ctx.moveTo(px, pad.top); ctx.lineTo(px, pad.top + plotH); ctx.stroke();
+        ctx.textAlign = 'center';
+        ctx.fillText(xv < 1 ? xv.toFixed(2) : (xv < 10 ? xv.toFixed(1) : xv.toFixed(0)), px, pad.top + plotH + 14);
+      }
+
+      // Axis Titles
+      if (xScale.title && xScale.title.text) {
+        ctx.fillStyle = textCol;
+        ctx.font = 'bold 9.5px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(xScale.title.text, pad.left + plotW / 2, cssH - 6);
+      }
+
+      // Plot Datasets
+      datasets.forEach((ds, idx) => {
+        const pts = seriesPoints[idx];
+        if (!pts || !pts.length) return;
+        const col = ds.borderColor || ds.backgroundColor || '#f59e0b';
+        const showLine = type === 'line' || ds.showLine === true;
+
+        if (showLine && pts.length > 1) {
+          ctx.save();
+          ctx.strokeStyle = col;
+          ctx.lineWidth = ds.borderWidth || 2.5;
+          if (Array.isArray(ds.borderDash)) ctx.setLineDash(ds.borderDash);
+          ctx.beginPath();
+          pts.forEach((p, pIdx) => {
+            const cx = mapX(p.x);
+            const cy = mapY(p.y);
+            if (pIdx === 0) ctx.moveTo(cx, cy);
+            else ctx.lineTo(cx, cy);
+          });
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        const r = ds.pointRadius !== undefined ? ds.pointRadius : 4;
+        if (r > 0) {
+          pts.forEach(p => {
+            ctx.beginPath();
+            ctx.arc(mapX(p.x), mapY(p.y), r, 0, Math.PI * 2);
+            ctx.fillStyle = ds.backgroundColor || col;
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          });
+        }
+      });
+
+      ctx.restore();
+    }
+
+    function renderSafeChart(key, canvasEl, config) {
+      if (!canvasEl) return;
+      chartConfigs[key] = { canvas: canvasEl, config };
+      try {
+        if (typeof window.Chart !== 'undefined') {
+          if (charts[key]) {
+            charts[key].destroy();
+          }
+          charts[key] = new window.Chart(canvasEl, config);
+          return;
+        }
+      } catch (err) {
+        console.warn('Chart.js fallback triggered for:', key, err);
+      }
+      drawFallbackCanvasChart(canvasEl, config);
     }
 
     // ==================== ENGINEERING CONSTANTS & DATASETS ====================
@@ -3240,12 +3477,23 @@
       buildCbrTable();
       buildMrTable();
       recalculateAll();
+
+      // Re-sync charts once external CDN scripts finish loading
+      window.addEventListener('load', () => {
+        recalculateAll();
+        reRenderVisibleCharts();
+      });
+      window.addEventListener('resize', () => {
+        reRenderVisibleCharts();
+      });
     });
   </script>
-<script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('service-worker.js'));
-  }
-</script>
+    </script>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('service-worker.js'));
+    }
+  </script>
 </body>
 </html>
